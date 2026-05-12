@@ -1,0 +1,12 @@
+[project]
+name = "lean-py"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pantograph",
+]
+
+[tool.uv.sources]
+pantograph = { git = "https://github.com/stanford-centaur/PyPantograph" }
