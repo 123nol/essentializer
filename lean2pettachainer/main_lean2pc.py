@@ -1,33 +1,43 @@
 """
-Lean/PyPantograph -> PeTTaChainer essentializer, Metamath-compatible version.
+Lean/PyPantograph -> PeTTaChainer translator, updated for the NEW parser format.
 
-This version is aligned with the parser that converts ProofScaffold/Metamath
-theorems into PeTTaChainer rules.
+This version matches the updated Metamath parser where object-level formulas are
+rendered in PeTTaChainer's native rule-like format:
 
-Important matching contract
----------------------------
-The parsed Metamath rules conclude formulas wrapped like:
+    (→ P Q)  ==>  (Implication (Premises P) (Conclusions Q))
+    (¬ P)    ==>  (Not P)
 
-    (Conclusions
-      (Provable FORMULA))
+and where formulas are NOT wrapped in (Provable ...).
 
-So this translator emits queries whose goal component is exactly:
+Therefore this translator emits queries like:
 
-    (: $prf (Provable FORMULA) $tv)
+    !(query 40 kb (: $prf FORMULA $tv))
 
-where FORMULA uses the same object-level symbols as the parsed rules:
+not:
 
-    →   object-level implication
-    ¬   negation
-    ∧   conjunction
-    ∨   disjunction
-    ↔   biconditional
+    !(query 40 kb (: $prf (Provable FORMULA) $tv))
 
-It does NOT emit object-level connectives as:
-    And, Or, Iff, Implication, Not
+Two modes are supported:
 
-and it does NOT use the meta-level PeTTaChainer rule constructor
-"Implication" inside the query goal.
+1. recurry mode
+   Lean state:
+       h1 : A
+       h2 : B
+       ⊢ C
+
+   Query:
+       A => (B => C)
+
+2. dynamic mode
+   Lean state:
+       h1 : A
+       h2 : B
+       ⊢ C
+
+   Commands:
+       add A as temporary local fact
+       add B as temporary local fact
+       query C
 """
 
 from __future__ import annotations
@@ -41,19 +51,14 @@ from typing import Any, Iterable
 from pantograph.server import Server
 
 
-# ---------------------------------------------------------------------
-# Object-language mapping.
-# Must match metamath_to_pettachainer_parser_v2.py output.
-# ---------------------------------------------------------------------
-
 LEAN_TO_PETTA: dict[str, str] = {
-    # Object-level propositional logic
-    "Lean.Constant.Implies": "→",
-    "Implies": "→",
-    "imp": "→",
-    "Lean.Constant.Not": "¬",
-    "Not": "¬",
-    "not": "¬",
+    "Lean.Constant.Implies": "Implication",
+    "Implies": "Implication",
+    "imp": "Implication",
+    "Lean.Constant.Not": "Not",
+    "Not": "Not",
+    "not": "Not",
+
     "Lean.Constant.And": "∧",
     "And": "∧",
     "Lean.Constant.Or": "∨",
@@ -61,8 +66,6 @@ LEAN_TO_PETTA: dict[str, str] = {
     "Lean.Constant.Iff": "↔",
     "Iff": "↔",
 
-    # Equality and domains. These are ontology-level atoms, not part of the
-    # pure propositional-calculus basis, but useful for mathlib goals.
     "Eq": "Equal",
     "Lean.Constant.Eq": "Equal",
     "Nat": "NaturalNumber",
@@ -72,13 +75,11 @@ LEAN_TO_PETTA: dict[str, str] = {
     "Real": "RealNumber",
     "Prop": "PROP",
 
-    # Relations
     "GT.gt": "GreaterThan",
     "LT.lt": "LessThan",
     "GE.ge": "GreaterEqual",
     "LE.le": "LessEqual",
 
-    # Arithmetic / typeclass notation
     "Add.add": "Addition",
     "HAdd.hAdd": "Addition",
     "Sub.sub": "Subtraction",
@@ -91,29 +92,24 @@ LEAN_TO_PETTA: dict[str, str] = {
     "HPow.hPow": "Power",
 }
 
-# Type atoms are not logical hypotheses by themselves.
 TYPE_ATOMS = {
     "PROP", "Prop", "TYPE0", "TYPE1", "TYPE2", "Type", "Sort",
     "NaturalNumber", "Integer", "RationalNumber", "RealNumber",
     "Nat", "Int", "Rat", "Real",
 }
 
-LOGIC_CONNECTIVES = {"→", "¬", "∧", "∨", "↔"}
-
 
 def map_const(name: str) -> str:
-    """Map Lean constants to the exact object-language symbols used in parsed rules."""
     if name in LEAN_TO_PETTA:
         return LEAN_TO_PETTA[name]
     if name.startswith("Lean.Constant."):
         short = name.removeprefix("Lean.Constant.")
         return LEAN_TO_PETTA.get(short, short)
-    return LEAN_TO_PETTA.get(name.split(".")[-1], name.split(".")[-1])
+    short = name.split(".")[-1]
+    return LEAN_TO_PETTA.get(name, LEAN_TO_PETTA.get(short, short))
 
 
 class VariableNormalizer:
-    """Stable variable names inside one translated proof state."""
-
     def __init__(self) -> None:
         self.var_map: dict[str, str] = {}
         self.counter = 0
@@ -177,16 +173,8 @@ def parse_sexp_string(s: str) -> Any:
     return out
 
 
-# ---------------------------------------------------------------------
-# Optional small parser for very simple pretty-printed fallback expressions.
-# This is not a replacement for structured Lean Expr JSON. It is only here so
-# p : Prop and simple P ∧ Q / P ∨ Q / P ↔ Q / P → Q pp strings do not break.
-# ---------------------------------------------------------------------
-
 def split_top_level_infix(s: str, ops: list[str]) -> tuple[str, str, str] | None:
     depth = 0
-    # Right-associative for implication; left-to-right is acceptable fallback
-    # for ∧, ∨, ↔ in simple printed formulas.
     for i, ch in enumerate(s):
         if ch == "(":
             depth += 1
@@ -203,34 +191,21 @@ def parse_simple_pp(s: str, normalizer: VariableNormalizer) -> Any:
         return LEAN_TO_PETTA[s]
     if s in TYPE_ATOMS:
         return map_const(s)
-
-    # Remove one pair of balanced outer parentheses.
     if s.startswith("(") and s.endswith(")"):
         inner = s[1:-1].strip()
         if inner.count("(") == inner.count(")"):
             return parse_simple_pp(inner, normalizer)
-
-    # Unary negation.
     if s.startswith("¬"):
-        return ["¬", parse_simple_pp(s[1:].strip(), normalizer)]
-
-    # Simple top-level binary connectives.
+        return ["Not", parse_simple_pp(s[1:].strip(), normalizer)]
     found = split_top_level_infix(s, ["↔", "→", "∧", "∨"])
     if found:
         left, op, right = found
-        return [op, parse_simple_pp(left, normalizer), parse_simple_pp(right, normalizer)]
-
-    # Very small fallback for notation-like atoms.
+        mapped_op = "Implication" if op == "→" else op
+        return [mapped_op, parse_simple_pp(left, normalizer), parse_simple_pp(right, normalizer)]
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_'.]*", s):
         return normalizer.get(s)
-
-    # Last resort: keep as escaped-ish atom by replacing spaces.
     return s.replace(" ", "_")
 
-
-# ---------------------------------------------------------------------
-# Structured Lean expression translation.
-# ---------------------------------------------------------------------
 
 def flatten_app(node: dict[str, Any]) -> list[Any]:
     args = []
@@ -243,6 +218,19 @@ def flatten_app(node: dict[str, Any]) -> list[Any]:
     return args
 
 
+def canonicalize_application(out: list[Any]) -> Any:
+    if not out:
+        return "Unit"
+    head = out[0]
+    if head == "Implication" and len(out) == 3:
+        return ["Implication", out[1], out[2]]
+    if head == "Not" and len(out) == 2:
+        return ["Not", out[1]]
+    if head in {"∧", "∨", "↔"} and len(out) == 3:
+        return [head, out[1], out[2]]
+    return out
+
+
 def translate_expr_dict(node: Any, normalizer: VariableNormalizer) -> Any:
     if node is None:
         return "Unknown"
@@ -253,88 +241,71 @@ def translate_expr_dict(node: Any, normalizer: VariableNormalizer) -> Any:
 
     kind = node.get("kind") or node.get("expr_type") or node.get("type")
 
-    # Common wrapper shapes first.
     if "sexp" in node and isinstance(node["sexp"], str):
         return translate_sexp_obj(parse_sexp_string(node["sexp"]), normalizer)
-    if "ast" in node:
-        return translate_expr_dict(node["ast"], normalizer)
+    for key in ("ast", "type_ast", "target_ast"):
+        if key in node:
+            return translate_expr_dict(node[key], normalizer)
     if "pp" in node and not kind:
         return parse_simple_pp(str(node["pp"]), normalizer)
 
     if kind in {"const", "Const"}:
         return map_const(str(node.get("name", "UnknownConst")))
-
     if kind in {"sort", "Sort"}:
         level = str(node.get("level", node.get("u", node.get("value", "0"))))
         return "PROP" if level == "0" else f"TYPE{level}"
-
     if kind in {"fvar", "FVar"}:
         var_id = node.get("id") or node.get("fvarId") or node.get("userName") or node.get("name") or "unknown"
         return normalizer.get(var_id)
-
     if kind in {"bvar", "BVar"}:
         return normalizer.get(f"b{node.get('index', 0)}")
-
     if kind in {"mvar", "MVar"}:
         return normalizer.get(f"mvar:{node.get('id', 'unknown')}")
-
     if kind in {"lit", "Lit"}:
         return literal_to_concept(node.get("value"))
-
     if kind in {"app", "App"}:
         flat = flatten_app(node)
         out = [translate_expr_dict(x, normalizer) for x in flat if x is not None]
         return canonicalize_application(out)
-
     if kind in {"forallE", "pi", "Forall", "forall"}:
         var_name = node.get("name") or node.get("binderName") or "_"
         var = normalizer.get(var_name)
         domain = translate_expr_dict(node.get("type") or node.get("domain"), normalizer)
         body = translate_expr_dict(node.get("body"), normalizer)
         return ["FORALL", [var, domain], body]
-
     if kind in {"lam", "lambda", "Lambda"}:
         var_name = node.get("name") or node.get("binderName") or "_"
         var = normalizer.get(var_name)
         domain = translate_expr_dict(node.get("type") or node.get("domain"), normalizer)
         body = translate_expr_dict(node.get("body"), normalizer)
         return ["LAMBDA", [var, domain], body]
-
     if kind in {"letE", "let", "Let"}:
         var = normalizer.get(node.get("name") or "let")
         value = translate_expr_dict(node.get("value"), normalizer)
         body = translate_expr_dict(node.get("body"), normalizer)
         return ["LET", [var, value], body]
-
     if kind in {"proj", "Proj"}:
         struct = map_const(str(node.get("typeName", node.get("structName", "Projection"))))
         idx = node.get("idx", node.get("index", "?"))
         expr = translate_expr_dict(node.get("expr"), normalizer)
         return ["Projection", struct, idx, expr]
-
-    # Last fallback if pp exists.
     if "pp" in node:
         return parse_simple_pp(str(node["pp"]), normalizer)
-
     return f"UnknownExprKind:{kind}"
 
 
 def translate_sexp_obj(node: Any, normalizer: VariableNormalizer, context: list[str] | None = None) -> Any:
     if context is None:
         context = []
-
     if isinstance(node, list):
         if not node:
             return "Unit"
-
         head = node[0]
-
         if head in {":forall", ":lambda"} and len(node) >= 4:
             var = normalizer.get(node[1])
             domain = translate_sexp_obj(node[2], normalizer, context)
             body = translate_sexp_obj(node[3], normalizer, [var] + context)
             return ["FORALL" if head == ":forall" else "LAMBDA", [var, domain], body]
-
         if head == ":c" and len(node) >= 2:
             return map_const(str(node[1]))
         if head == ":fv" and len(node) >= 2:
@@ -343,81 +314,91 @@ def translate_sexp_obj(node: Any, normalizer: VariableNormalizer, context: list[
             return "PROP" if str(node[1]) == "0" else f"TYPE{node[1]}"
         if head == ":lit" and len(node) >= 2:
             return literal_to_concept(node[1])
-
         if isinstance(head, str) and head.startswith(":"):
             return [head[1:]] + [translate_sexp_obj(x, normalizer, context) for x in node[1:]]
-
         return canonicalize_application([translate_sexp_obj(x, normalizer, context) for x in node])
-
     if isinstance(node, str) and node.isdigit():
         idx = int(node)
         return context[idx] if idx < len(context) else f"b{idx}"
-
     return map_const(node) if isinstance(node, str) and node in LEAN_TO_PETTA else str(node)
 
 
-def canonicalize_application(out: list[Any]) -> Any:
-    """
-    Clean up application nodes so formulas look like the parsed Metamath formulas.
-
-    Examples:
-      ["→", A, B] stays ["→", A, B]
-      ["∧", A, B] stays ["∧", A, B]
-      ["Not", A] should already be ["¬", A]
-    """
-    if not isinstance(out, list) or not out:
-        return out
-    head = out[0]
-    if head in LOGIC_CONNECTIVES:
-        return out
-    return out
-
-
-# ---------------------------------------------------------------------
-# Logical normalization.
-# ---------------------------------------------------------------------
-
 def process_foralls(node: Any) -> Any:
-    """
-    Convert Lean forallE into:
-      - object-level implication when the domain is propositional
-      - HasType premise when the domain is a data type
-      - drop quantification over Prop/Type variables
-
-    For pure propositional-calculus goals like:
-      forall (p q : Prop), Or p q -> Or q p
-    this eventually leaves only the object-level formula.
-    """
     if isinstance(node, list) and len(node) == 3 and node[0] == "FORALL":
         var, domain = node[1]
         body = process_foralls(node[2])
-
         if domain in {"PROP", "Prop", "TYPE0", "TYPE1", "TYPE2"}:
             return body
-
         if domain in TYPE_ATOMS:
-            return ["→", ["HasType", var, map_const(domain)], body]
-
-        return ["→", process_foralls(domain), body]
-
+            return ["Implication", ["HasType", var, map_const(domain)], body]
+        return ["Implication", process_foralls(domain), body]
     if isinstance(node, list):
         return [process_foralls(x) for x in node]
-
     return node
 
 
 def normalize_logic(node: Any) -> Any:
-    """
-    Keep formulas in the same object-language basis as the parsed Metamath rules.
-    Do not dismantle ∧/∨/↔ into only →/¬ here, because the parsed rules preserve them.
-    """
     return process_foralls(node)
 
 
-def format_sexpr(obj: Any) -> str:
+def render_term(obj: Any) -> str:
     if isinstance(obj, list):
-        return "(" + " ".join(format_sexpr(x) for x in obj) + ")"
+        return "(" + " ".join(render_term(x) for x in obj) + ")"
     return str(obj)
+
+
+def render_formula(obj: Any) -> str:
+    """Render formula in the same format emitted by the updated parser."""
+    if isinstance(obj, list):
+        if not obj:
+            return "()"
+        head = obj[0]
+        if head == "Implication" and len(obj) == 3:
+            premise = render_formula(obj[1])
+            conclusion = render_formula(obj[2])
+            return (
+                "(Implication\n"
+                f"   (Premises {premise})\n"
+                f"   (Conclusions {conclusion})\n"
+                ")"
+            )
+        if head == "Not" and len(obj) == 2:
+            return f"(Not {render_formula(obj[1])})"
+        if head in {"∧", "∨", "↔"} and len(obj) == 3:
+            return f"({head} {render_formula(obj[1])} {render_formula(obj[2])})"
+        return "(" + " ".join(render_term(x) for x in obj) + ")"
+    return f"({obj})"
+
+
+def validate_formula_shape(expr: Any) -> None:
+    forbidden = {"Provable"}
+
+    def walk(x: Any) -> None:
+        if isinstance(x, list):
+            if x and x[0] in forbidden:
+                raise ValueError("The updated parser no longer wraps formulas in (Provable ...).")
+            for y in x:
+                walk(y)
+    walk(expr)
+
+
+def build_query(formula: Any, *, kb: str = "kb", depth: int = 40) -> str:
+    validate_formula_shape(formula)
+    return f"!(query {depth} {kb} (: $prf {render_formula(formula)} $tv))"
+
+
+def expr_from_field(obj: Any, normalizer: VariableNormalizer) -> Any:
+    obj = to_plain(obj)
+    if isinstance(obj, dict):
+        if "sexp" in obj and isinstance(obj["sexp"], str):
+            return translate_sexp_obj(parse_sexp_string(obj["sexp"]), normalizer)
+        for key in ("ast", "type_ast", "target_ast"):
+            if key in obj:
+                return translate_expr_dict(obj[key], normalizer)
+        if "pp" in obj:
+            return parse_simple_pp(str(obj["pp"]), normalizer)
+        return translate_expr_dict(obj, normalizer)
+    return translate_expr_dict(obj, normalizer)
 
 
 def is_nonlogical_type_expr(expr: Any) -> bool:
@@ -428,41 +409,15 @@ def is_has_type_expr(expr: Any) -> bool:
     return isinstance(expr, list) and len(expr) >= 1 and expr[0] == "HasType"
 
 
-# ---------------------------------------------------------------------
-# Goal/context extraction.
-# ---------------------------------------------------------------------
-
-def expr_from_field(obj: Any, normalizer: VariableNormalizer) -> Any:
-    obj = to_plain(obj)
-
-    if isinstance(obj, dict):
-        if "sexp" in obj and isinstance(obj["sexp"], str):
-            return translate_sexp_obj(parse_sexp_string(obj["sexp"]), normalizer)
-        for key in ("ast", "type_ast", "target_ast"):
-            if key in obj:
-                return translate_expr_dict(obj[key], normalizer)
-        if "pp" in obj:
-            return parse_simple_pp(str(obj["pp"]), normalizer)
-        return translate_expr_dict(obj, normalizer)
-
-    return translate_expr_dict(obj, normalizer)
-
-
 def extract_hypotheses(goal_data: Any, normalizer: VariableNormalizer) -> list[Any]:
     g = to_plain(goal_data)
     if not isinstance(g, dict):
         return []
-
     hyps: list[Any] = []
 
     for h in g.get("hypotheses", []):
         h_plain = to_plain(h)
-        h_type_source = (
-            h_plain.get("type")
-            or h_plain.get("t")
-            or h_plain.get("target")
-            or h_plain
-        )
+        h_type_source = h_plain.get("type") or h_plain.get("t") or h_plain.get("target") or h_plain
         h_expr = normalize_logic(expr_from_field(h_type_source, normalizer))
         if not is_nonlogical_type_expr(h_expr) and not is_has_type_expr(h_expr):
             hyps.append(h_expr)
@@ -473,11 +428,9 @@ def extract_hypotheses(goal_data: Any, normalizer: VariableNormalizer) -> list[A
         if t_source is None:
             continue
         t_expr = normalize_logic(expr_from_field(t_source, normalizer))
-        # Skip p : Prop, x : Nat, etc. Keep h : proposition.
         if is_nonlogical_type_expr(t_expr) or is_has_type_expr(t_expr):
             continue
         hyps.append(t_expr)
-
     return hyps
 
 
@@ -485,77 +438,24 @@ def extract_target(goal_data: Any, normalizer: VariableNormalizer) -> Any:
     g = to_plain(goal_data)
     if not isinstance(g, dict):
         return normalize_logic(expr_from_field(g, normalizer))
-
     for key in ("target", "goal", "target_ast", "type"):
         if key in g and g[key] is not None:
             return normalize_logic(expr_from_field(g[key], normalizer))
-
     if "sexp" in g:
         return normalize_logic(expr_from_field({"sexp": g["sexp"]}, normalizer))
     if "pp" in g:
         return normalize_logic(parse_simple_pp(str(g["pp"]), normalizer))
-
     return "UnknownGoal"
 
 
 def recurry(hyps: Iterable[Any], target: Any) -> Any:
-    """
-    H1, H2, ..., Target  ==>  (→ H1 (→ H2 Target))
-
-    This is the exact nested implication style that can unify with parsed
-    Metamath theorem conclusions like:
-        (Provable (→ $phi $psi))
-        (Provable (→ $phi (→ $psi $chi)))
-    """
     out = target
     for h in reversed(list(hyps)):
-        out = ["→", h, out]
+        out = ["Implication", h, out]
     return out
 
 
-def validate_formula_shape(expr: Any) -> None:
-    """
-    Catch the most important mismatch: query goals must not contain the
-    meta-level rule constructors used by compileadd.
-    """
-    forbidden = {"Implication", "Premises", "Conclusions", "Provable"}
-
-    def walk(x: Any) -> None:
-        if isinstance(x, list):
-            if x and x[0] in forbidden:
-                raise ValueError(
-                    f"Invalid object-level formula: found meta-level constructor {x[0]!r}. "
-                    "The query should be (: $prf (Provable FORMULA) $tv), and FORMULA itself "
-                    "must use object-level symbols like →, ¬, ∧, ∨, ↔."
-                )
-            for y in x:
-                walk(y)
-
-    walk(expr)
-
-
-def build_query(formula: Any, *, kb: str = "kb", depth: int = 40) -> str:
-    validate_formula_shape(formula)
-    return f"!(query {depth} {kb} (: $prf (Provable {format_sexpr(formula)}) $tv))"
-
-
-def essentialize_subgoal(
-    goal_data: Any,
-    *,
-    kb: str = "kb",
-    mode: str = "recurry",
-    depth: int = 40,
-) -> tuple[str, str]:
-    """
-    Translate one Lean/PyPantograph goal into PeTTaChainer commands.
-
-    mode="recurry":
-      h1 : A, h2 : B ⊢ C
-      query (Provable (→ A (→ B C)))
-
-    mode="dynamic":
-      add A and B as local Provable facts, then query (Provable C)
-    """
+def essentialize_subgoal(goal_data: Any, *, kb: str = "kb", mode: str = "recurry", depth: int = 40) -> tuple[str, str]:
     normalizer = VariableNormalizer()
     hyps = extract_hypotheses(goal_data, normalizer)
     target = extract_target(goal_data, normalizer)
@@ -568,48 +468,38 @@ def essentialize_subgoal(
         branch = uuid.uuid4().hex[:8]
         output_lines: list[str] = []
         cleanup_lines: list[str] = []
-
         for i, hyp in enumerate(hyps):
             validate_formula_shape(hyp)
             label = f"local-hyp-{branch}-{i}"
-            atom = f"(: {label} (Provable {format_sexpr(hyp)}) (STV 1.0 1.0))"
-            output_lines.append(f"!(add-atom {kb} {atom})")
-            cleanup_lines.append(f"!(remove-atom {kb} {atom})")
-
+            atom = f"(: {label} {render_formula(hyp)} (STV 1.0 1.0))"
+            output_lines.append(f"!(compileadd {kb} {atom})")
+            cleanup_lines.append(f";; cleanup needed for {label}: {render_formula(hyp)}")
         output_lines.append(build_query(target, kb=kb, depth=depth))
         return "\n".join(output_lines), "\n".join(cleanup_lines)
 
     raise ValueError("mode must be 'recurry' or 'dynamic'")
 
 
-# ---------------------------------------------------------------------
-# Demo.
-# ---------------------------------------------------------------------
-
 def run_demo() -> None:
     server = Server(imports=["Init"], options={"printExprAST": True})
-
     state0 = server.goal_start("forall (p q : Prop), Or p q -> Or q p")
     state1 = server.goal_tactic(state0, tactic="intro p q h")
-
     plain = to_plain(state1)
     print("Raw state after tactic:")
     print(json.dumps(plain, indent=2, ensure_ascii=False, default=str))
-
     goals = plain.get("goals", []) if isinstance(plain, dict) else []
     for i, goal in enumerate(goals):
         print("\n" + "=" * 80)
         print(f"Goal {i}")
-
-        print("\n--- Recurry mode: query goal matches parsed theorem conclusions ---")
-        script, cleanup = essentialize_subgoal(goal, mode="recurry")
+        print("\n--- Recurry mode ---")
+        script, _ = essentialize_subgoal(goal, mode="recurry")
         print(script)
-
         print("\n--- Dynamic local-fact mode ---")
         script, cleanup = essentialize_subgoal(goal, mode="dynamic")
         print(script)
-        print("\nCleanup:")
-        print(cleanup)
+        if cleanup:
+            print("\nCleanup notes:")
+            print(cleanup)
 
 
 if __name__ == "__main__":
