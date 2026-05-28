@@ -493,26 +493,41 @@ def proof_state_after_tactics(server, goal_type: str, tactics: list[str]):
 
 
 
-def run_demo(output_path: str) -> None:
+def run_demo(input_path: str, output_path: str) -> None:
+    # --- NEW: Read Goal and Tactics from Input File ---
+    if not os.path.exists(input_path):
+        print(f"❌ Error: Input file not found at {input_path}")
+        return
+        
+    with open(input_path, "r", encoding="utf-8") as f:
+        try:
+            input_data = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"❌ Error parsing JSON input file: {e}")
+            return
+
+    # Extract the data (with fallbacks if the file is formatted incorrectly)
+    goal = input_data.get("goal")
+    tactics = input_data.get("tactics", [])
+
+    if not goal:
+        print("❌ Error: No 'goal' key found in the input JSON.")
+        return
+
     print("Connecting to Lean 4 via Pantograph...")
     server = Server(imports=["Init"], options={"printExprAST": True})
     
-    goal = "∀ (P Q R : Prop), P → (P → Q) → (Q → R) → R"
+    print(f"Loaded Goal: {goal}")
+    print(f"Loaded Tactics: {tactics}")
 
-    state_after_apply_hQR = proof_state_after_tactics(
+    # Pass the dynamically loaded goal and tactics to Pantograph
+    state_after_tactics = proof_state_after_tactics(
         server,
         goal,
-        [
-            "intro P Q R hP hPQ hQR",
-            "apply hQR",
-        ],
+        tactics,
     )
 
-    plain = to_plain(state_after_apply_hQR)
-
-    print("\nRaw state after tactic: apply hQR")
-    # print(json.dumps(plain, indent=2, ensure_ascii=False, default=str))
-
+    plain = to_plain(state_after_tactics)
     goals = plain.get("goals", []) if isinstance(plain, dict) else []
 
     # Store all generated scripts in case there are multiple subgoals
@@ -522,12 +537,12 @@ def run_demo(output_path: str) -> None:
 
     ]
 
-    for i, goal in enumerate(goals):
+    for i, g in enumerate(goals):
         print("\n" + "=" * 80)
         print(f"Goal {i} Processed:")
 
         # Extract the dynamic script
-        script, _ = essentialize_subgoal(goal, mode="dynamic")
+        script, _ = essentialize_subgoal(g, mode="dynamic")
         
         # Print to terminal for visibility
         print(script)
@@ -535,13 +550,11 @@ def run_demo(output_path: str) -> None:
         # Add to our file output buffer
         full_output_script.append(f"; === PeTTaChainer Script for Goal {i} ===\n{script}")
 
-    # --- NEW: File Writing Logic ---
+    # --- File Writing Logic ---
     if output_path:
-        # 1. If the user provided a directory path, create a default filename inside it
         if os.path.isdir(output_path) or output_path.endswith(('/', '\\')):
             os.makedirs(output_path, exist_ok=True)
             final_file_path = os.path.join(output_path, "pettachainer_query.metta")
-        # 2. Otherwise, treat it as a direct file path
         else:
             parent_dir = os.path.dirname(output_path)
             if parent_dir:
@@ -553,12 +566,21 @@ def run_demo(output_path: str) -> None:
             f.write("\n\n".join(full_output_script))
             
         print("\n" + "=" * 80)
-        print(f" Successfully wrote PeTTaChainer script to: {final_file_path}")
+        print(f"✅ Successfully wrote PeTTaChainer script to: {final_file_path}")
 
 
 if __name__ == "__main__":
-    # Set up argument parsing to accept the path from the user
     parser = argparse.ArgumentParser(description="Extract Lean goals to PeTTaChainer scripts.")
+    
+    # New Input Argument
+    parser.add_argument(
+        "-i", "--input", 
+        type=str, 
+        required=True,
+        help="Path to the input JSON file containing the 'goal' and 'tactics'."
+    )
+    
+    # Existing Output Argument
     parser.add_argument(
         "-o", "--output", 
         type=str, 
@@ -568,5 +590,5 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    # Run the demo with the user-provided path
-    run_demo(args.output)
+    # Run the demo with both user-provided paths
+    run_demo(args.input, args.output)
