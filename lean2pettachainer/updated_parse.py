@@ -592,3 +592,21 @@ if __name__ == "__main__":
     
     # Run the demo with both user-provided paths
     run_demo(args.input, args.output)
+
+
+"""
+the structure of the goal and tacitc you want to apply that are placed in the input file should be:
+
+{
+    "goal": "∀ (P Q R : Prop), P → (P → Q) → (Q → R) → R",
+    "tactics": [
+        "intro P Q R hP hPQ hQR",
+        "apply hQR"
+    ]
+}
+
+and call the function like python 
+
+upadated_parse.py -i ./input_goal.json -o ./my_tests/
+
+"""
