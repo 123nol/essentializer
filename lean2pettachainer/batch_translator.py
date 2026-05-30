@@ -555,7 +555,7 @@ def run_demo(input_path: str, output_dir: str) -> None:
         # Initialize script with standard imports
         full_output_script = [
             "!(import! &self ../../petta_chainer)",
-            "!(import! &self ../metamath_axioms)"
+            "!(import! &self ../axioms/metamath_axioms)"
         ]
 
         for i, g in enumerate(goals):
