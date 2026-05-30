@@ -1,0 +1,35 @@
+[
+    {
+        "name": "demorgan_law",
+        "goal": "∀ (P Q : Prop), ¬(P ∨ Q) → (¬P ∧ ¬Q)",
+        "tactics": ["intro P Q h_not_or"]
+    },
+    {
+        "name": "contrapositive",
+        "goal": "∀ (P Q : Prop), (P → Q) → (Not Q → Not P)",
+        "tactics": ["intro P Q hPQ hnQ"]
+    },
+    {
+        "name": "and_commutativity",
+        "goal": "∀ (P Q : Prop), P ∧ Q → Q ∧ P",
+        "tactics": [
+            "intro P Q h",
+            "cases h with hP hQ",
+            "constructor"
+        ]
+    }
+    ,
+
+  
+  {
+    "name": "and_commutativity",
+    "goal": "∀ (P Q : Prop), P ∧ Q → Q ∧ P",
+    "tactics": [
+      "intro P Q h",
+      "cases h",
+      "constructor"
+    ]
+  }
+
+]
+
