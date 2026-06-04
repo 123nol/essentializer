@@ -609,19 +609,13 @@ run_all_generated.sh
 This script runs each generated `.metta` file using:
 
 ```bash
-sh run.sh <absolute-path-to-metta-file>
-```
-
-from inside:
-
-```bash
-/home/nolawi/other_petta
+petta <absolute-path-to-metta-file>
 ```
 
 The runner captures output into one log file per subgoal:
 
 ```bash
-sh run.sh /path/to/and_commutativity_goal_0.metta   > /path/to/and_commutativity_goal_0.log 2>&1
+petta /path/to/and_commutativity_goal_0.metta > /path/to/and_commutativity_goal_0.log 2>&1
 ```
 
 So the shell script is responsible for turning `.metta` files into `.log` files.
@@ -638,7 +632,6 @@ A simplified manifest looks like:
 {
   "input_path": "/path/to/tests.json",
   "output_dir": "/path/to/generated_metta",
-  "petta_workdir": "/home/nolawi/other_petta",
   "runner_path": "/path/to/generated_metta/run_all_generated.sh",
   "depth": 10,
   "normalize_variables": false,
@@ -691,7 +684,7 @@ and_commutativity_goal_0.log
 contains the output of:
 
 ```bash
-sh run.sh and_commutativity_goal_0.metta
+petta and_commutativity_goal_0.metta
 ```
 
 The log should include the returned value from the PeTTaChainer query:
@@ -879,7 +872,7 @@ This usually means the `.metta` file failed to run.
 ### Step 1: Generate subgoal files
 
 ```bash
-python -m translator_modules.cli --input tests.json --output ./generated_metta --petta-workdir /home/nolawi/other_petta
+python -m translator_modules.cli --input tests.json --output ./generated_metta
 ```
 
 This creates:

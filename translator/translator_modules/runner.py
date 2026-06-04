@@ -32,7 +32,6 @@ def write_runner_script(
     generated_items: list[dict[str, Any]],
     output_dir: str,
     *,
-    petta_workdir: str = "/home/nolawi/other_petta",
     runner_name: str = "run_all_generated.sh",
     stop_on_error: bool = False,
 ) -> str:
@@ -48,8 +47,6 @@ def write_runner_script(
     lines = [
         "#!/usr/bin/env bash",
         "set -u",
-        "",
-        f"cd {shell_quote(petta_workdir)}",
         "",
         "echo 'Running generated PeTTaChainer subgoal files...'",
         "",
@@ -70,10 +67,10 @@ def write_runner_script(
         lines.append(f"echo 'Log:   {log_path}'")
 
         if stop_on_error:
-            lines.append(f"sh run.sh {shell_quote(metta_path)} > {shell_quote(log_path)} 2>&1")
+            lines.append(f"petta {shell_quote(metta_path)} > {shell_quote(log_path)} 2>&1")
         else:
             lines.append(
-                f"sh run.sh {shell_quote(metta_path)} > {shell_quote(log_path)} 2>&1 "
+                f"petta {shell_quote(metta_path)} > {shell_quote(log_path)} 2>&1 "
                 f"|| echo 'Command failed for {test_name} goal {goal_index}; see log.'"
             )
         lines.append("")

@@ -6,11 +6,7 @@ runner script, captures one .log file per subgoal, and can parse/rank those logs
 
 The generated runner executes each .metta file using:
 
-    sh run.sh <absolute-path-to-metta-file>
-
-from inside:
-
-    /home/nolawi/other_petta
+    petta <absolute-path-to-metta-file>
 
 Default output layout:
 

@@ -52,7 +52,6 @@ def run_demo(
     input_path: str,
     output_dir: str,
     *,
-    petta_workdir: str = "/home/nolawi/other_petta",
     depth: int = 10,
     runner_name: str = "run_all_generated.sh",
     stop_on_error: bool = False,
@@ -203,7 +202,6 @@ def run_demo(
         runner_path = write_runner_script(
             generated_items,
             output_dir,
-            petta_workdir=petta_workdir,
             runner_name=runner_name,
             stop_on_error=stop_on_error,
         )
@@ -214,7 +212,6 @@ def run_demo(
     manifest = {
         "input_path": os.path.abspath(input_path),
         "output_dir": os.path.abspath(output_dir),
-        "petta_workdir": petta_workdir,
         "runner_path": os.path.abspath(runner_path) if runner_path else None,
         "depth": depth,
         "normalize_variables": normalize_variables,
@@ -260,13 +257,6 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Output directory for generated .metta, .log, manifest, and runner files.",
-    )
-
-    parser.add_argument(
-        "--petta-workdir",
-        type=str,
-        default="/home/nolawi/other_petta",
-        help="Directory where 'sh run.sh <metta-file>' must be executed.",
     )
 
     parser.add_argument(
@@ -391,7 +381,6 @@ def main() -> None:
         run_demo(
             args.input,
             args.output,
-            petta_workdir=args.petta_workdir,
             depth=args.depth,
             runner_name=args.runner_name,
             stop_on_error=args.stop_on_error,
