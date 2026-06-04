@@ -85,14 +85,19 @@ def write_runner_script(
 
 
 def extract_stv_scores(log_text: str) -> list[tuple[float, float]]:
-    """
-    Extract all (STV strength confidence) pairs from a log.
-    """
-    matches = re.findall(
-        r"\(STV\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\)",
-        log_text,
-    )
-    return [(float(s), float(c)) for s, c in matches]
+    number = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+    stv_pattern = re.compile(rf"\(STV\s+({number})\s+({number})\)")
+
+    proof_scores: list[tuple[float, float]] = []
+
+    for line in log_text.splitlines():
+        if "rule-proof" not in line:
+            continue
+
+        for strength, confidence in stv_pattern.findall(line):
+            proof_scores.append((float(strength), float(confidence)))
+
+    return proof_scores
 
 
 def score_from_stv(strength: float, confidence: float) -> float:
