@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 from typing import Any
 
 from .extractor import essentialize_subgoal, proof_state_after_tactics
@@ -60,6 +61,16 @@ def run_demo(
 ) -> dict[str, Any]:
     input_data = load_input_json(input_path)
 
+    if os.path.exists(output_dir):
+        for filename in os.listdir(output_dir):
+            file_path = os.path.join(output_dir, filename)
+            try:
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.unlink(file_path)
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to delete {file_path}. Reason: {e}")
     os.makedirs(output_dir, exist_ok=True)
 
     if lean_imports is None:
@@ -123,8 +134,10 @@ def run_demo(
             with open(complete_file_path, "w", encoding="utf-8") as f:
                 f.write(
                     "\n\n".join([
-                        "!(import! &self ../../petta_chainer)",
-                        "!(import! &self ../axioms/metamath_axioms)",
+"!(import! &self (library lib_import))",
+"!(git-import! \"https://github.com/rTreutlein/PeTTaChainer.git\") ",
+"!(import! &self (library PeTTaChainer \"pettachainer/metta/petta_chainer\"))",
+"!(import! &self /home/nolawi/clone-maths/maths_ai/pln_inference/metta/axioms/metamath_axioms)",
                         "; No subgoals remain. Proof complete!",
                     ])
                 )
