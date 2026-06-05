@@ -11,6 +11,28 @@ translator_modules/
 
 ---
 
+## Quick Start: The Complete Pipeline
+
+Run the following three consecutive commands to execute the full pipeline. Make sure to replace the file paths below with the correct paths for your environment:
+
+```bash
+# 1. Generate subgoal files
+python3 translator.py \
+  --input tests.json \
+  --output ./generated_metta \
+  --axioms-path /home/nolawi/clone-maths/maths_ai/pln_inference/metta/axioms/metamath_axioms
+
+# 2. Run the generated .metta files (this executes petta and creates .log files)
+bash ./generated_metta/run_all_generated.sh
+
+# 3. Rank subgoals based on PeTTaChainer results
+python3 translator.py \
+  --rank-manifest ./generated_metta/generated_manifest.json \
+  --ranking-output ./generated_metta/ranking_results.json
+```
+
+---
+
 ## 1. What this translator does
 
 The translator takes an input JSON file containing Lean goals and tactic sequences. It sends each goal to Lean through Pantograph, applies the listed tactics, extracts the remaining proof goals, and translates each remaining subgoal into a PeTTaChainer `.metta` query file.
@@ -1205,14 +1227,15 @@ The current translator supports the first by default and still allows the second
 2. Complex Mathlib expressions may require more robust AST handling.
 3. The STV parser assumes logs contain explicit `(STV strength confidence)` text.
 4. Preserved Lean names may still collide across branches unless your cache key also includes branch/tactic-path information.
-5. The `.metta` imports are currently fixed as:
+5. While the `metamath_axioms` import is now dynamically provided via the `--axioms-path` flag, the `PeTTaChainer` library imports are currently hardcoded in the generated files as:
 
 ```metta
-!(import! &self ../../petta_chainer)
-!(import! &self ../axioms/metamath_axioms)
+!(import! &self (library lib_import))
+!(git-import! "https://github.com/rTreutlein/PeTTaChainer.git")
+!(import! &self (library PeTTaChainer "pettachainer/metta/petta_chainer"))
 ```
 
-If your directory layout changes, those imports may need adjustment.
+If the upstream library name or structure changes, these fixed imports in the translator will need to be updated.
 
 ---
 

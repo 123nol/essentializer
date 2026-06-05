@@ -58,6 +58,7 @@ def run_demo(
     stop_on_error: bool = False,
     lean_imports: list[str] | None = None,
     normalize_variables: bool = False,
+    axioms_path: str,
 ) -> dict[str, Any]:
     input_data = load_input_json(input_path)
 
@@ -72,6 +73,11 @@ def run_demo(
             except Exception as e:
                 print(f"⚠️ Warning: Failed to delete {file_path}. Reason: {e}")
     os.makedirs(output_dir, exist_ok=True)
+
+    # Create an empty use-module!.metta file
+    use_module_path = os.path.join(output_dir, "use-module!.metta")
+    with open(use_module_path, "w", encoding="utf-8") as f:
+        pass
 
     if lean_imports is None:
         lean_imports = ["Init"]
@@ -134,10 +140,11 @@ def run_demo(
             with open(complete_file_path, "w", encoding="utf-8") as f:
                 f.write(
                     "\n\n".join([
-"!(import! &self (library lib_import))",
+                   "!(import! &self (library lib_import))",
 "!(git-import! \"https://github.com/rTreutlein/PeTTaChainer.git\") ",
+
 "!(import! &self (library PeTTaChainer \"pettachainer/metta/petta_chainer\"))",
-"!(import! &self /home/nolawi/clone-maths/maths_ai/pln_inference/metta/axioms/metamath_axioms)",
+f"!(import! &self {axioms_path})",
                         "; No subgoals remain. Proof complete!",
                     ])
                 )
@@ -178,8 +185,11 @@ def run_demo(
             log_file_path = os.path.abspath(os.path.join(output_dir, f"{safe_test_name}_goal_{i}.log"))
 
             subgoal_script = [
-                "!(import! &self ../../petta_chainer)",
-                "!(import! &self ../axioms/metamath_axioms)",
+"!(import! &self (library lib_import))",
+"!(git-import! \"https://github.com/rTreutlein/PeTTaChainer.git\") ",
+"!(import! &self (library PeTTaChainer \"pettachainer/metta/petta_chainer\"))",
+f"!(import! &self {axioms_path})",
+                       
                 f"; === Test: {test_name} ===",
                 f"; === Goal index: {i} ===",
                 f"; === Target formula: {query_formula} ===",
@@ -270,6 +280,13 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Output directory for generated .metta, .log, manifest, and runner files.",
+    )
+
+    parser.add_argument(
+        "--axioms-path",
+        type=str,
+        default=None,
+        help="Absolute path to the metamath_axioms file to import.",
     )
 
     parser.add_argument(
@@ -390,6 +407,8 @@ def main() -> None:
             raise SystemExit("Error: --input is required unless --rank-manifest is used.")
         if not args.output:
             raise SystemExit("Error: --output is required unless --rank-manifest is used.")
+        if not args.axioms_path:
+            raise SystemExit("Error: --axioms-path is required unless --rank-manifest is used.")
 
         run_demo(
             args.input,
@@ -399,6 +418,7 @@ def main() -> None:
             stop_on_error=args.stop_on_error,
             lean_imports=args.lean_import or ["Init"],
             normalize_variables=args.normalize_variables,
+            axioms_path=args.axioms_path,
         )
 
 
